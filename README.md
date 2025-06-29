@@ -80,7 +80,7 @@ This repository **does NOT contain** any proprietary backend API code, core bot 
 
 ## Accessing the Full J.A.I. Experience
 
-Jasmine AI offers a premium, transformative experience. To see the complete system in action or to gain access to a trial or permanent activation key, please visit our official website or contact the administrator directly:
+Jasmine AI offers a premium, transformative experience. To see the complete system in action or to gain access to a trial or activation key, please visit our official website or contact the team directly via email:
 
 * **Official Website:** [https://jai-controlpanel.com](https://jai-controlpanel.com)
 * **Contact Email:** [info@jai-controlpanel.com](mailto:info@jai-controlpanel.com)
