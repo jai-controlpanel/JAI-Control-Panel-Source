@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jasmine AI Control Panel</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { color: #555; }
+        .section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #fff; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], input[type="password"], textarea, select {
+            width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px;
+        }
+        button {
+            background-color: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 4px;
+            cursor: pointer; font-size: 16px; margin-right: 10px;
+        }
+        button:hover { background-color: #0056b3; }
+        button.danger { background-color: #dc3545; }
+        button.danger:hover { background-color: #c82333; }
+        pre { background-color: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
+        #login-form, #dashboard-content { display: none; }
+        .chat-log-entry { border-bottom: 1px dashed #eee; padding: 5px 0; }
+        .sender-user { font-weight: bold; color: #007bff; }
+        .sender-jasmine { font-weight: bold; color: #28a745; }
+        .sender-manual_agent { font-weight: bold; color: #ffc107; }
+        .sender-system_error { font-weight: bold; color: #dc3545; }
+        .sender-other { font-weight: bold; color: #6c757d; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Jasmine AI Control Panel</h1>
+
+        <div id="login-form" class="section">
+            <h2>Login</h2>
+            <label for="username">Username:</label>
+            <input type="text" id="username" value="admin">
+            <label for="password">Password:</label>
+            <input type="password" id="password" value="your_admin_password">
+            <button onclick="login()">Login</button>
+            <p id="login-message" style="color: red;"></p>
+        </div>
+
+        <div id="dashboard-content">
+            <div class="section">
+                <h2>System Status</h2>
+                <button onclick="getSystemStatus()">Refresh Status</button>
+                <pre id="system-status-output"></pre>
+            </div>
+
+            <div class="section">
+                <h2>User Context & Manual Control</h2>
+                <label for="user-id-input">Enter User ID:</label>
+                <input type="text" id="user-id-input" placeholder="e.g., facebook_user_12345" value="">
+                <button onclick="getUserContext()">Load User Context</button>
+                <button onclick="clearAIMemory()">Clear AI Memory (Redis Only)</button>
+                <button class="danger" onclick="clearAllUserData()">Clear All User Data (DB & Redis)</button>
+                <p id="user-action-message" style="color: green;"></p>
+
+                <div id="user-context-output" style="margin-top: 20px;">
+                    <h3>User Overview: <span id="user-overview-id">N/A</span></h3>
+                    <p>Total Conversations: <span id="user-stat-convs">0</span></p>
+                    <p>Total Messages: <span id="user-stat-msgs">0</span></p>
+                    <p>Images Uploaded: <span id="user-stat-images">0</span></p>
+                    <p>Last Activity: <span id="user-stat-last-activity">N/A</span></p>
+
+                    <h3>Current State:</h3>
+                    <pre id="funnel-status-display"></pre>
+                    <h3>Funnel Progress Snapshot (from OCI):</h3>
+                    <pre id="funnel-progress-cloud-snapshot"></pre>
+                    <h3>Recent Chat Logs (Last 10 for dashboard, from SQLite):</h3>
+                    <div id="recent-chat-logs-display"></div>
+                    <h3>User Uploaded Images:</h3>
+                    <div id="user-uploaded-images-display" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px;"></div>
+
+
+                    <h3 style="margin-top: 20px;">Manual Mode Control:</h3>
+                    <label for="manual-mode-toggle">Manual Mode Active:</label>
+                    <select id="manual-mode-toggle" onchange="setManualMode()">
+                        <option value="false">False (AI Active)</option>
+                        <option value="true">True (AI Inactive)</option>
+                    </select>
+
+                    <h3 style="margin-top: 20px;">Send Manual Message:</h3>
+                    <textarea id="manual-message-content" placeholder="Type message to user..." rows="3"></textarea>
+                    <button onclick="sendManualMessage()">Send Text Message</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // IMPORTANT: Replace with your actual API URL
+        const API_BASE_URL = "http://localhost:5000"; // Or your Nginx/Gunicorn public IP/domain
+
+        // --- Basic Auth / Session (for this simple dashboard) ---
+        function checkLoginStatus() {
+            const token = localStorage.getItem('jwt_token'); 
+            if (token === 'logged_in') { 
+                document.getElementById('login-form').style.display = 'none';
+                document.getElementById('dashboard-content').style.display = 'block';
+                // Trigger an initial refresh of all relevant data for the dashboard
+                getSystemStatus(); 
+            } else {
+                document.getElementById('login-form').style.display = 'block';
+                document.getElementById('dashboard-content').style.display = 'none';
+            }
+        }
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const loginMessage = document.getElementById('login-message');
+            loginMessage.textContent = '';
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    localStorage.setItem('jwt_token', 'logged_in'); 
+                    checkLoginStatus();
+                    loginMessage.textContent = data.message;
+                    loginMessage.style.color = 'green';
+                    // The /login endpoint for dashboard.html doesn't initially load user-specific data into GUI,
+                    // but the global status will update. User-specific data is loaded when they enter a User ID.
+                } else {
+                    loginMessage.textContent = data.message || 'Login failed.';
+                    loginMessage.style.color = 'red';
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                loginMessage.textContent = 'Network error during login.';
+                loginMessage.style.color = 'red';
+            }
+        }
+
+        // --- API Call Helper ---
+        async function fetchData(endpoint, method = 'GET', body = null) {
+            const options = {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+            };
+            if (body) {
+                options.body = JSON.stringify(body);
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        throw new Error(`API Error ${response.status}: ${errorJson.message || errorJson.error || 'Unknown error'}`);
+                    } catch (e) {
+                        throw new Error(`API Error ${response.status}: ${errorText}`);
+                    }
+                }
+                return await response.json();
+            } catch (error) {
+                console.error(`Error fetching ${endpoint}:`, error);
+                alert(`Error: ${error.message}`);
+                return null;
+            }
+        }
+
+        // --- Dashboard Functions ---
+        async function getSystemStatus() {
+            const statusOutput = document.getElementById('system-status-output');
+            const data = await fetchData('/status');
+            if (data) {
+                statusOutput.textContent = JSON.stringify(data, null, 2);
+            } else {
+                statusOutput.textContent = 'Failed to load system status.';
+            }
+        }
+
+        async function getUserContext() {
+            const userId = document.getElementById('user-id-input').value.trim();
+            if (!userId) {
+                alert('Please enter a User ID.');
+                return;
+            }
+
+            // Get references to all output elements
+            const userOverviewId = document.getElementById('user-overview-id');
+            const userStatConvs = document.getElementById('user-stat-convs');
+            const userStatMsgs = document.getElementById('user-stat-msgs');
+            const userStatImages = document.getElementById('user-stat-images');
+            const userStatLastActivity = document.getElementById('user-stat-last-activity');
+            const funnelStatusDisplay = document.getElementById('funnel-status-display');
+            const funnelProgressCloudSnapshot = document.getElementById('funnel-progress-cloud-snapshot');
+            const aiHistoryPreviewDisplay = document.getElementById('ai-history-preview-display');
+            const recentLogsDisplay = document.getElementById('recent-chat-logs-display');
+            const userUploadedImagesDisplay = document.getElementById('user-uploaded-images-display');
+
+
+            // Clear previous data
+            userOverviewId.textContent = 'Loading...';
+            userStatConvs.textContent = '0';
+            userStatMsgs.textContent = '0';
+            userStatImages.textContent = '0';
+            userStatLastActivity.textContent = 'N/A';
+            funnelStatusDisplay.textContent = 'Loading...';
+            funnelProgressCloudSnapshot.textContent = 'Loading...';
+            aiHistoryPreviewDisplay.textContent = 'Loading...';
+            recentLogsDisplay.innerHTML = 'Loading...';
+            userUploadedImagesDisplay.innerHTML = 'Loading...';
+
+
+            // Fetch data from the new user-isolated dashboard endpoint
+            const data = await fetchData(`/api/user/${userId}/dashboard`);
+            if (data) {
+                // Populate User Overview Stats
+                userOverviewId.textContent = data.user_id || 'N/A';
+                userStatConvs.textContent = data.stats?.total_conversations || 0;
+                userStatMsgs.textContent = data.stats?.total_messages || 0;
+                userStatImages.textContent = data.stats?.uploaded_images || 0;
+                userStatLastActivity.textContent = data.stats?.last_activity ? new Date(data.stats.last_activity).toLocaleString() : 'N/A';
+
+                // Populate Current State (funnel_status)
+                funnelStatusDisplay.textContent = JSON.stringify(data.current_state, null, 2);
+                
+                // Populate Funnel Progress from Cloud Snapshot (OCI)
+                funnelProgressCloudSnapshot.textContent = JSON.stringify(data.funnel_progress_cloud_snapshot, null, 2);
+
+                // Populate AI Chat History Preview
+                aiHistoryPreviewDisplay.textContent = JSON.stringify(data.recent_activity, null, 2); // recent_activity is now the AI history preview
+
+                // Populate Recent Chat Logs (from SQLite)
+                recentLogsDisplay.innerHTML = '';
+                if (data.recent_activity && data.recent_activity.length > 0) {
+                    data.recent_activity.forEach(log => {
+                        const div = document.createElement('div');
+                        div.className = 'chat-log-entry';
+                        let senderClass = 'sender-other';
+                        if (log.sender === 'user') senderClass = 'sender-user';
+                        else if (log.sender === 'Jasmine') senderClass = 'sender-jasmine';
+                        else if (log.sender === 'Manual_Agent') senderClass = 'sender-manual_agent';
+                        else if (log.sender === 'System_Error') senderClass = 'sender-system_error';
+
+                        // Ensure timestamp exists and is formatted
+                        const displayTime = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : 'N/A';
+                        div.innerHTML = `<span class="${senderClass}">${log.sender} (${displayTime}):</span> ${log.message}`;
+                        recentLogsDisplay.appendChild(div);
+                    });
+                } else {
+                    recentLogsDisplay.textContent = 'No recent chat logs found.';
+                }
+
+                // Populate User Uploaded Images
+                userUploadedImagesDisplay.innerHTML = '';
+                if (data.user_images && data.user_images.length > 0) {
+                    data.user_images.forEach(image => {
+                        const imgContainer = document.createElement('div');
+                        imgContainer.style.textAlign = 'center';
+                        const img = document.createElement('img');
+                        img.src = image.image_path; // This is the OCI public URL
+                        img.alt = image.label || 'User Image';
+                        img.style.width = '100px';
+                        img.style.height = '100px';
+                        img.style.objectFit = 'cover';
+                        img.style.borderRadius = '5px';
+                        imgContainer.appendChild(img);
+                        const label = document.createElement('small');
+                        label.textContent = image.label || 'No Label';
+                        imgContainer.appendChild(label);
+                        userUploadedImagesDisplay.appendChild(imgContainer);
+                    });
+                } else {
+                    userUploadedImagesDisplay.textContent = 'No images uploaded by this user.';
+                }
+
+                // Update manual mode toggle based on fetched status
+                const currentManualMode = data.current_state?.manual_mode_active || false;
+                document.getElementById('manual-mode-toggle').value = String(currentManualMode);
+
+            } else {
+                userOverviewId.textContent = 'Failed to load user overview.';
+                funnelStatusDisplay.textContent = 'Failed to load funnel status.';
+                funnelProgressCloudSnapshot.textContent = 'Failed to load cloud snapshot.';
+                aiHistoryPreviewDisplay.textContent = 'Failed to load AI history.';
+                recentLogsDisplay.innerHTML = 'Failed to load recent chat logs.';
+                userUploadedImagesDisplay.innerHTML = 'Failed to load user images.';
+            }
+        }
+
+        async function setManualMode() {
+            const userId = document.getElementById('user-id-input').value.trim();
+            if (!userId) {
+                alert('Please enter a User ID.');
+                return;
+            }
+            const manualModeActive = document.getElementById('manual-mode-toggle').value === 'true';
+            
+            // Fetch the current user data to get the platform, instead of parsing raw JSON
+            const currentDashboardData = await fetchData(`/api/user/${userId}/dashboard`);
+            if (!currentDashboardData) {
+                document.getElementById('user-action-message').textContent = 'Could not determine user platform for manual mode.';
+                document.getElementById('user-action-message').style.color = 'red';
+                return;
+            }
+            const platform = currentDashboardData.current_state?.platform || 'web_gui'; 
+
+            const messageDisplay = document.getElementById('user-action-message');
+            messageDisplay.textContent = 'Setting manual mode...';
+            messageDisplay.style.color = 'orange';
+
+            const data = await fetchData('/api/user/' + userId + '/update_state', 'POST', { // Use new dedicated endpoint
+                user_id: userId,
+                platform: platform,
+                funnel_state: currentDashboardData.current_state.funnel_state, // Preserve current funnel_state
+                manual_mode_active: manualModeActive // This field will be updated in Redis state hash
+            });
+            if (data) {
+                messageDisplay.textContent = data.message || `Manual mode for ${userId} set to ${manualModeActive}.`;
+                messageDisplay.style.color = 'green';
+                getUserContext(); // Refresh context to show new state
+            } else {
+                messageDisplay.textContent = 'Failed to set manual mode.';
+                messageDisplay.style.color = 'red';
+            }
+        }
+
+        async function sendManualMessage() {
+            const userId = document.getElementById('user-id-input').value.trim();
+            if (!userId) {
+                alert('Please enter a User ID.');
+                return;
+            }
+            const messageContent = document.getElementById('manual-message-content').value.trim();
+            if (!messageContent) {
+                alert('Please enter a message to send.');
+                return;
+            }
+            // Fetch the current user data to get the platform, instead of parsing raw JSON
+            const currentDashboardData = await fetchData(`/api/user/${userId}/dashboard`);
+            if (!currentDashboardData) {
+                document.getElementById('user-action-message').textContent = 'Could not determine user platform for manual message.';
+                document.getElementById('user-action-message').style.color = 'red';
+                return;
+            }
+            const platform = currentDashboardData.current_state?.platform || 'web_chat'; 
+
+            const messageDisplay = document.getElementById('user-action-message');
+            messageDisplay.textContent = 'Sending manual message...';
+            messageDisplay.style.color = 'orange';
+
+            const data = await fetchData('/send_manual_message', 'POST', {
+                user_id: userId,
+                message: messageContent,
+                platform: platform
+            });
+            if (data) {
+                messageDisplay.textContent = data.message || `Manual message sent to ${userId}.`;
+                messageDisplay.style.color = 'green';
+                document.getElementById('manual-message-content').value = ''; // Clear input
+                getUserContext(); // Refresh context to show new message
+            } else {
+                messageDisplay.textContent = data.error || 'Failed to send manual message.';
+                messageDisplay.style.color = 'red';
+            }
+        }
+
+        async function clearAIMemory() {
+            const userId = document.getElementById('user-id-input').value.trim();
+            if (!userId) {
+                alert('Please enter a User ID.');
+                return;
+            }
+            if (!confirm(`Are you sure you want to clear AI memory (Redis only) for user ${userId}? This cannot be undone.`)) {
+                return;
+            }
+
+            const messageDisplay = document.getElementById('user-action-message');
+            messageDisplay.textContent = 'Clearing AI memory...';
+            messageDisplay.style.color = 'orange';
+
+            const data = await fetchData('/clear_user_ai_memory', 'POST', { user_id: userId });
+            if (data) {
+                messageDisplay.textContent = data.message;
+                messageDisplay.style.color = 'green';
+                getUserContext(); // Refresh context
+            } else {
+                messageDisplay.textContent = data.error || 'Failed to clear AI memory.';
+                messageDisplay.style.color = 'red';
+            }
+        }
+
+        async function clearAllUserData() {
+            const userId = document.getElementById('user-id-input').value.trim();
+            if (!userId) {
+                alert('Please enter a User ID.');
+                return;
+            }
+            if (!confirm(`WARNING: Are you absolutely sure you want to clear ALL user data (DB & Redis) for user ${userId}? This will delete all chat logs and AI history and is IRREVERSIBLE.`)) {
+                return;
+            }
+
+            const messageDisplay = document.getElementById('user-action-message');
+            messageDisplay.textContent = 'Clearing ALL user data...';
+            messageDisplay.style.color = 'orange';
+
+            const data = await fetchData('/clear_user_chat_data', 'POST', { user_id: userId });
+            if (data) {
+                messageDisplay.textContent = data.message;
+                messageDisplay.style.color = 'green';
+                getUserContext(); // Refresh context (should be empty now)
+            } else {
+                messageDisplay.textContent = data.error || 'Failed to clear all user data.';
+                messageDisplay.style.color = 'red';
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', checkLoginStatus);
+    </script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jasmine AI Web Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #2b2b2b; /* Dark background similar to CustomTkinter */
+            color: #ffffff; /* White text */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .chat-container {
+            width: 400px;
+            height: 600px;
+            background-color: #333333; /* Slightly lighter dark for container */
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .chat-header {
+            background-color: #0078d4; /* A vibrant blue for header */
+            padding: 15px;
+            text-align: center;
+            font-size: 1.2em;
+            font-weight: bold;
+            border-top-left-radius: 10px;
+            border-top-right-radius: 10px;
+        }
+        .chat-messages {
+            flex-grow: 1;
+            padding: 15px;
+            overflow-y: auto;
+            border-bottom: 1px solid #444;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 15px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        .message.user {
+            background-color: #0078d4; /* Blue for user messages */
+            align-self: flex-end;
+            margin-left: auto;
+        }
+        .message.bot {
+            background-color: #555555; /* Grey for bot messages */
+            align-self: flex-start;
+            margin-right: auto;
+        }
+        .message.typing {
+            font-style: italic;
+            color: #aaa;
+        }
+        .chat-input-area {
+            display: flex;
+            padding: 15px;
+            gap: 10px;
+        }
+        .chat-input-area input[type="text"] {
+            flex-grow: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 20px;
+            background-color: #444444;
+            color: #ffffff;
+            outline: none;
+        }
+        .chat-input-area button {
+            padding: 10px 15px;
+            background-color: #0078d4;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        .chat-input-area button:hover {
+            background-color: #005bb5;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">Jasmine AI Chat</div>
+        <div class="chat-messages" id="chat-messages">
+            </div>
+        <div class="chat-input-area">
+            <input type="text" id="user-input" placeholder="Type your message...">
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chat-messages');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+
+        // <<< API_URL is now dynamically injected by Flask!
+        const API_BASE_URL = "{{ API_BASE_URL }}";
+        const CHAT_ENDPOINT = `${API_BASE_URL}/chat`;
+        // >>>
+
+        // Generate a unique user ID for this session (stored in localStorage)
+        let userId = localStorage.getItem('jasmineWebUserId');
+        if (!userId) {
+            userId = 'web_' + Date.now() + Math.random().toString(36).substring(2, 15);
+            localStorage.setItem('jasmineWebUserId', userId);
+        }
+
+        // Add a message to the chat display
+        function addMessage(text, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', sender);
+            messageDiv.textContent = text;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight; // Scroll to bottom
+        }
+
+        // Simulate bot typing
+        let typingIndicator = null;
+        function showTypingIndicator() {
+            typingIndicator = document.createElement('div');
+            typingIndicator.classList.add('message', 'bot', 'typing');
+            typingIndicator.textContent = 'Jasmine is typing...';
+            chatMessages.appendChild(typingIndicator);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function hideTypingIndicator() {
+            if (typingIndicator && typingIndicator.parentNode) {
+                typingIndicator.parentNode.removeChild(typingIndicator);
+                typingIndicator = null;
+            }
+        }
+
+        // Send message to Flask API
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (message === '') return;
+
+            addMessage(message, 'user');
+            userInput.value = ''; // Clear input field
+            userInput.disabled = true; // Disable input while waiting for bot
+            sendButton.disabled = true;
+
+            showTypingIndicator();
+
+            try {
+                const response = await fetch(CHAT_ENDPOINT, { // <<< USE CHAT_ENDPOINT
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        message: message,
+                        platform: 'web'
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                const replies = data.response; // Assuming response is a list of strings
+
+                hideTypingIndicator(); // Hide typing indicator before displaying replies
+
+                // Display replies with delays
+                for (let i = 0; i < replies.length; i++) {
+                    await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000)); // Delay 1-3 seconds
+                    addMessage(replies[i], 'bot');
+                }
+
+            } catch (error) {
+                console.error('Error sending message:', error);
+                hideTypingIndicator();
+                addMessage('Oops! Jasmine is currently unavailable or there was an error.', 'bot');
+            } finally {
+                userInput.disabled = false; // Re-enable input
+                sendButton.disabled = false;
+                userInput.focus(); // Focus input for next message
+            }
+        }
+
+        // Event Listeners
+        sendButton.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Initial greeting: Trigger the '/start' flow implicitly on page load
+        window.onload = async () => {
+            addMessage('Connecting to Jasmine...', 'bot');
+            showTypingIndicator();
+            try {
+                const response = await fetch(CHAT_ENDPOINT, { // <<< USE CHAT_ENDPOINT
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        message: "/start", // Send implicit /start
+                        platform: "web"
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                const replies = data.response;
+
+                hideTypingIndicator();
+
+                for (let i = 0; i < replies.length; i++) {
+                    await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000)); // Delay 1-3 seconds
+                    addMessage(replies[i], 'bot');
+                }
+            } catch (error) {
+                console.error('Error during initial connection:', error);
+                hideTypingIndicator();
+                addMessage('Failed to connect to Jasmine. Please ensure the backend server is running.', 'bot');
+            } finally {
+                userInput.disabled = false;
+                sendButton.disabled = false;
+                userInput.focus();
+            }
+        };
+
+    </script>
+</body>
+</html>
